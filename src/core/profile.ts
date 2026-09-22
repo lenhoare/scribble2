@@ -17,20 +17,18 @@ interface ParamDef {
 // Order matters: it is the encoding order. Only ever append.
 export const PARAMS = [
   { key: 'slant', label: 'Slant (°)', min: -10, max: 30, def: 0.55, group: 'Shape' },
-  { key: 'slantJitter', label: 'Slant jitter (°)', min: 0, max: 8, def: 0.4, group: 'Shape' },
   { key: 'width', label: 'Width', min: 0.7, max: 1.35, def: 0.45, group: 'Shape' },
-  { key: 'ascender', label: 'Ascender length', min: 0.6, max: 1.4, def: 0.5, group: 'Shape' },
+  { key: 'ascender', label: 'Ascender length', min: 0.6, max: 2, def: 0.29, group: 'Shape' },
   { key: 'tracking', label: 'Letter spacing', min: -0.2, max: 0.4, def: 0.4, group: 'Spacing' },
   { key: 'wordSpace', label: 'Word spacing', min: 0.5, max: 2, def: 0.35, group: 'Spacing' },
   { key: 'charLift', label: 'Per-letter lift', min: 0, max: 0.25, def: 0.5, group: 'Quirks' },
   { key: 'charScale', label: 'Per-letter size', min: 0, max: 0.3, def: 0.5, group: 'Quirks' },
-  { key: 'charShape', label: 'Per-letter shape', min: 0, max: 0.2, def: 0.6, group: 'Quirks' },
-  { key: 'shapeJitter', label: 'Shape jitter', min: 0, max: 0.12, def: 0.6, group: 'Instance' },
+  { key: 'charShape', label: 'Per-letter shape', min: 0, max: 0.6, def: 0.2, group: 'Quirks' },
+  { key: 'shapeJitter', label: 'Shape jitter', min: 0, max: 0.24, def: 0.6, group: 'Instance' },
   { key: 'sizeJitter', label: 'Size jitter', min: 0, max: 0.2, def: 0.4, group: 'Instance' },
-  { key: 'tremor', label: 'Tremor', min: 0, max: 0.04, def: 0.3, group: 'Stroke' },
+  { key: 'tremor', label: 'Tremor', min: 0, max: 0.1, def: 0.3, group: 'Stroke' },
   { key: 'tremorFreq', label: 'Tremor frequency', min: 0.5, max: 6, def: 0.4, group: 'Stroke' },
   { key: 'overshoot', label: 'Overshoot', min: 0, max: 0.25, def: 0.5, group: 'Stroke' },
-  { key: 'roundness', label: 'Roundness', min: 0, max: 1, def: 0.5, group: 'Stroke' },
   { key: 'pen', label: 'Pen width', min: 0.03, max: 0.22, def: 0.3, group: 'Pen' },
   { key: 'pressure', label: 'Pressure variation', min: 0, max: 1, def: 0.5, group: 'Pen' },
   { key: 'taper', label: 'Taper', min: 0, max: 1, def: 0.5, group: 'Pen' },
@@ -70,7 +68,7 @@ export function randomHand(seed: number): Hand {
   return hand;
 }
 
-const VERSION = 1;
+const VERSION = 3; // v2: dropped slantJitter. v3: dropped roundness, ascender range to 2
 
 export function encodeHand(hand: Hand): string {
   const bytes = new Uint8Array(6 + PARAMS.length);

@@ -18,15 +18,17 @@ whole-glyph transforms with **pen strokes** deformed from inside.
 
 | v1 observation | v2 rule |
 |---|---|
-| Slant felt human | Global slant per hand, small per-instance variance |
-| Mixing forward/back slant in one hand did not | Slant variance never flips the hand's slant direction |
+| Slant felt human | One global slant per hand |
+| Mixing forward/back slant in one hand did not; per-letter slant jitter didn't add anything in v2 either | No slant variation |
 | Baseline wander felt human but was annoying | No baseline wander. (Optional whole-line tilt only, default 0) |
 | Up/down placement worked when subtle and overall | Vertical offset is a **persistent per-character quirk** ("this person's o sits high"), not random per instance |
 | Left/right placement didn't work | No horizontal jitter. Spacing is regular (global tracking only) |
 | Font glyphs still look like a font | Mess comes from **inside the strokes**: shape warp, tremor, overshoot, pen pressure |
 | Pixi per-glyph Text | No Pixi. Pure geometry core + thin renderers |
 
-Start **very messy** by default; a `mess` multiplier tones it down per use.
+`mess` (0..1, default 0.83) is a per-use setting that scales all deformation. It maps onto the
+raw multiplier range 0–0.6: above 0.6 was too messy. 0 is kept for neat hands and for switching
+the mess off to see what it's doing.
 
 ---
 
@@ -67,9 +69,8 @@ Encoded as a short string: `s1` + base64url (≈ 35 chars). Unknown/older versio
 |---|---|---|
 | Shape | `skeleton` | base letterforms |
 | | `slant` | global slant (−10°…+30°) |
-| | `slantJitter` | per-instance slant variance (never flips sign) |
 | | `width` | horizontal squash/stretch |
-| | `ascender` | ascender/descender length relative to x-height |
+| | `ascender` | ascender/descender length relative to x-height (0.6–2) |
 | Spacing | `tracking` | letter spacing |
 | | `wordSpace` | word spacing |
 | Quirks (persistent per char) | `charLift` | vertical offset per character |
@@ -80,7 +81,6 @@ Encoded as a short string: `s1` + base64url (≈ 35 chars). Unknown/older versio
 | Stroke | `tremor` | high-frequency wobble along strokes |
 | | `tremorFreq` | wobble frequency |
 | | `overshoot` | stroke ends run long / stop short |
-| | `roundness` | corner smoothing |
 | Pen | `pen` | nib width |
 | | `pressure` | width variation along a stroke |
 | | `taper` | thin start/end of strokes |
@@ -91,7 +91,7 @@ Encoded as a short string: `s1` + base64url (≈ 35 chars). Unknown/older versio
 
 ```ts
 const hand = decodeHand('s1…') // or randomHand(seed), defaultHand()
-const r = render(hand, text, { size: 24, maxWidth: 600, lineHeight: 3, mess: 1 })
+const r = render(hand, text, { size: 24, maxWidth: 600, lineHeight: 3, mess: 0.83 })
 // r.width, r.height, r.baseline (px), r.polygons: Float32Array[] (x,y pairs, fill nonzero)
 toSVG(r, { color: '#1b2a4a' })       // string
 drawCanvas(ctx, r, { color })         // Canvas2D
@@ -99,10 +99,14 @@ drawCanvas(ctx, r, { color })         // Canvas2D
 
 `size` = x-height in px. Text: multi-line (`\n`) and word-wrapped to `maxWidth`.
 
+Layout frame is fixed, not fitted to the ink: left edge at x = 0, room above the first baseline
+from the skeleton's tallest ascender (scaled by `ascender`), room below the last baseline from its
+deepest descender. Typing a tall or deep letter never moves the rest of the text.
+
 ## Performance targets
 
 - Current: ~2 ms per ~100 characters on desktop (geometry + outline), ≈20 µs per letter.
-  Target ≤ 1 ms: fuse the per-stroke passes (smooth/tremor/normals/outline) and reuse buffers.
+  Target ≤ 1 ms: fuse the per-stroke passes (warp/tremor/normals/outline) and reuse buffers.
 - Apps should cache `RenderResult` per (hand code, text, options); it is immutable.
 - Skeleton densification and per-letter quirk warps are cached.
 - Renderers are allocation-light; SVG output is a single `<path>` per render

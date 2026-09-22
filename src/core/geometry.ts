@@ -8,21 +8,6 @@ export function length(p: Pts): number {
   return d;
 }
 
-/** Pull interior points toward their neighbours' midpoint. Endpoints stay put. */
-export function smooth(p: Pts, amount: number, passes: number): Pts {
-  if (amount <= 0 || p.length < 6) return p;
-  let a = p;
-  for (let k = 0; k < passes; k++) {
-    const b = new Float64Array(a);
-    for (let i = 2; i < a.length - 2; i += 2) {
-      b[i] = a[i] + amount * ((a[i - 2] + a[i + 2]) / 2 - a[i]);
-      b[i + 1] = a[i + 1] + amount * ((a[i - 1] + a[i + 3]) / 2 - a[i + 1]);
-    }
-    a = b;
-  }
-  return a;
-}
-
 /**
  * Adjust stroke ends: positive values extend along the end tangent (overshoot),
  * negative values trim (stopping short). Trims never remove more than 35% of the stroke.

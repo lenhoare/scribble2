@@ -35,3 +35,23 @@ function densify(s: number[]): Float64Array {
   }
   return new Float64Array(out);
 }
+
+const extentCache = new Map<SkeletonId, { top: number; bottom: number }>();
+
+/** Highest and lowest points across the letters and digits of a skeleton. */
+export function extents(skeleton: SkeletonId): { top: number; bottom: number } {
+  let e = extentCache.get(skeleton);
+  if (!e) {
+    e = { top: 1, bottom: 0 };
+    for (const ch of 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') {
+      for (const s of raw[skeleton].glyphs[ch]?.s ?? []) {
+        for (let i = 1; i < s.length; i += 2) {
+          if (s[i] > e.top) e.top = s[i];
+          if (s[i] < e.bottom) e.bottom = s[i];
+        }
+      }
+    }
+    extentCache.set(skeleton, e);
+  }
+  return e;
+}

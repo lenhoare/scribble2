@@ -1,8 +1,8 @@
 // (hand, text, options) → outline polygons in px. Pure and deterministic.
-import { adjustEnds, circle, length, normals, outline, smooth, type Pts } from './geometry';
+import { adjustEnds, circle, length, normals, outline, type Pts } from './geometry';
 import { resolve, type Hand, type Resolved } from './profile';
 import { hash, noise1, rng, type Rng } from './rand';
-import { glyph } from './skeleton';
+import { extents, glyph } from './skeleton';
 
 export interface RenderOptions {
   /** x-height in px. Default 24. */
@@ -11,7 +11,10 @@ export interface RenderOptions {
   maxWidth?: number;
   /** Line pitch in x-heights. Default 3. */
   lineHeight?: number;
-  /** Master messiness multiplier. 0 = clean skeleton (slant, width, pen only). Default 1. */
+  /**
+   * Messiness, 0..1 (default 0.83). 0 = no deformation (clean skeleton with slant, width and pen),
+   * 1 = the messiest that still reads well. Values above 1 extrapolate.
+   */
   mess?: number;
   /** Padding around the ink in x-heights. Default 1. */
   padding?: number;
@@ -27,11 +30,16 @@ export interface RenderResult {
 }
 
 const DEG = Math.PI / 180;
+const MESS_MAX = 0.6;
+/** Raw multiplier 0.5: the middle of the range that looked most natural. */
+export const DEFAULT_MESS = 0.5 / MESS_MAX;
 
 export function render(hand: Hand, text: string, opts: RenderOptions = {}): RenderResult {
   const size = opts.size ?? 24;
   const lineHeight = opts.lineHeight ?? 3;
-  const mess = opts.mess ?? 1;
+  // Feedback: above ~0.6 of the raw multiplier is too messy. 0 stays available for neat
+  // hands and for switching the mess off to compare.
+  const mess = MESS_MAX * (opts.mess ?? DEFAULT_MESS);
   const pad = opts.padding ?? 1;
   const maxWidth = (opts.maxWidth ?? Infinity) / size;
   const P = resolve(hand);
@@ -66,15 +74,22 @@ export function render(hand: Hand, text: string, opts: RenderOptions = {}): Rend
     }
     lineY -= lineHeight;
   }
+  const lastBaseline = lineY + lineHeight;
 
-  return toPixels(polys, size, pad);
+  // Fixed frame, so typing a tall or deep letter doesn't move the rest of the text:
+  // the left edge is x = 0 and the vertical room comes from the skeleton's tallest ascender and
+  // deepest descender, not from the ink. Slack covers lift, size jitter and overshoot.
+  const ext = extents(hand.skeleton);
+  const SLACK = 0.3;
+  const top = 1 + (ext.top - 1) * P.ascender + SLACK;
+  const bottom = lastBaseline + ext.bottom * P.ascender - SLACK;
+  return toPixels(polys, size, pad, top, bottom);
 }
 
 /** Per-character quirks: fixed for a given hand + character, however often it appears. */
 interface Quirk {
   lift: number;
   scale: number;
-  slant: number;
   /** Persistent warp displacement (amplitude 1) at each skeleton point, per stroke. */
   disp: Float64Array[];
 }
@@ -87,7 +102,7 @@ function quirk(hand: Hand, ch: string): Quirk {
   if (!q) {
     if (quirkCache.size > 4096) quirkCache.clear();
     const r = rng(hash(hand.seed, 'q', ch));
-    q = { lift: r.bell(), scale: r.bell(), slant: r.bell(), disp: [] };
+    q = { lift: r.signed(), scale: r.bell(), disp: [] };
     const w = warp(r);
     const d = [0, 0];
     for (const src of glyph(hand.skeleton, ch)?.strokes ?? []) {
@@ -127,15 +142,14 @@ function drawChar(
   const r = rng(key);
 
   const scale = qScale * (1 + r.bell() * P.sizeJitter * m);
-  const lift = q.lift * P.charLift * Math.min(m, 1.5);
+  // Full strength at the default mess, so the slider reads as the actual offset in x-heights.
+  const lift = q.lift * P.charLift * Math.min(m / (MESS_MAX * DEFAULT_MESS), 1.5);
   const iWarp = warp(r);
   const shapeAmp = P.charShape * m;
   const jitAmp = P.shapeJitter * m;
 
-  // Slant varies per letter but never flips the hand's direction (v1 lesson).
-  let slant = P.slant + (q.slant * 0.5 + r.bell()) * P.slantJitter * Math.min(m, 1.5);
-  if (Math.abs(P.slant) > 1 && Math.sign(slant) !== Math.sign(P.slant)) slant = P.slant * 0.25;
-  const shear = Math.tan(slant * DEG);
+  // One slant for the whole hand: varying it per letter looked wrong in v1 and v2.
+  const shear = Math.tan(P.slant * DEG);
 
   const d = [0, 0];
   for (let s = 0; s < g.strokes.length; s++) {
@@ -159,7 +173,6 @@ function drawChar(
       p[i + 1] = y;
     }
     p = adjustEnds(p, r.bell() * P.overshoot * m, r.bell() * P.overshoot * m);
-    p = smooth(p, 0.5 * P.roundness, 2);
     p = tremor(p, P, r, m);
     for (let i = 0; i < p.length; i += 2) {
       p[i] += ox;
@@ -227,24 +240,20 @@ function ink(p: Pts, P: Resolved, r: Rng, scale: number): Float64Array {
   return outline(p, w);
 }
 
-function toPixels(polys: Float64Array[], size: number, pad: number): RenderResult {
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  for (const p of polys) {
-    for (let i = 0; i < p.length; i += 2) {
-      if (p[i] < minX) minX = p[i];
-      if (p[i] > maxX) maxX = p[i];
-      if (p[i + 1] < minY) minY = p[i + 1];
-      if (p[i + 1] > maxY) maxY = p[i + 1];
-    }
-  }
-  if (!polys.length) return { width: pad * 2 * size, height: pad * 2 * size, baseline: pad * size, polygons: [] };
+/**
+ * Map layout units (y up, first baseline at 0) to px (y down). `top` and `bottom` are the frame's
+ * vertical bounds in layout units. Ink can slightly overhang the frame at extreme settings.
+ */
+function toPixels(polys: Float64Array[], size: number, pad: number, top: number, bottom: number): RenderResult {
+  let maxX = 0;
+  for (const p of polys) for (let i = 0; i < p.length; i += 2) if (p[i] > maxX) maxX = p[i];
   const polygons = polys.map((p) => {
     const o = new Float32Array(p.length);
     for (let i = 0; i < p.length; i += 2) {
-      o[i] = (p[i] - minX + pad) * size;
-      o[i + 1] = (maxY - p[i + 1] + pad) * size;
+      o[i] = (p[i] + pad) * size;
+      o[i + 1] = (top - p[i + 1] + pad) * size;
     }
     return o;
   });
-  return { width: (maxX - minX + pad * 2) * size, height: (maxY - minY + pad * 2) * size, baseline: (maxY + pad) * size, polygons };
+  return { width: (maxX + pad * 2) * size, height: (top - bottom + pad * 2) * size, baseline: (top + pad) * size, polygons };
 }

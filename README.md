@@ -8,7 +8,7 @@ import { randomHand, encodeHand, decodeHand, render, toSVG } from './src';
 
 const hand = randomHand(42);          // or decodeHand('s1…')
 const code = encodeHand(hand);        // save per person / per app
-const svg = toSVG(render(hand, 'Hello there', { size: 24, mess: 1 }));
+const svg = toSVG(render(hand, 'Hello there', { size: 24, mess: 0.83 }));
 ```
 
 ```sh

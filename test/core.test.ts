@@ -32,13 +32,21 @@ describe('render', () => {
     expect(toSVG(render(randomHand(1), text))).not.toBe(toSVG(render(randomHand(2), text)));
   });
 
-  it('editing one word leaves the other words untouched', () => {
+  it('editing one word leaves the other words untouched, in place', () => {
     const h = randomHand(7);
-    const a = render(h, 'alpha beta gamma', { padding: 0 });
-    const b = render(h, 'alpha BETA gamma', { padding: 0 });
-    // First word's strokes (5 letters) are identical in both.
+    const a = render(h, 'alpha beta gamma');
+    const b = render(h, 'alpha BETA gamma');
+    // The first word's strokes (5 letters) are identical, pixel for pixel: no shift from the
+    // taller capitals in the edited word.
     const first = (r: typeof a) => r.polygons.slice(0, 5).map((p) => Array.from(p).join());
     expect(first(b)).toEqual(first(a));
+    expect(b.baseline).toBe(a.baseline);
+  });
+
+  it('keeps the frame height fixed whatever letters are typed', () => {
+    const h = randomHand(7);
+    const heights = ['a', 'l', 'g', 'Tall', 'jumpy'].map((t) => render(h, t).height);
+    expect(new Set(heights).size).toBe(1);
   });
 
   it('repeated words are not identical', () => {
