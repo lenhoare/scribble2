@@ -1,0 +1,20 @@
+{
+  "name": "scribble",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite playground",
+    "build:skeletons": "node scripts/build-skeletons.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "bench": "tsx scripts/bench.ts",
+    "preview": "tsx scripts/preview.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.1"
+  }
+}
