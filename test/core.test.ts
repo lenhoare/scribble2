@@ -36,11 +36,24 @@ describe('render', () => {
     const h = randomHand(7);
     const a = render(h, 'alpha beta gamma');
     const b = render(h, 'alpha BETA gamma');
-    // The first word's strokes (5 letters) are identical, pixel for pixel: no shift from the
-    // taller capitals in the edited word.
-    const first = (r: typeof a) => r.polygons.slice(0, 5).map((p) => Array.from(p).join());
+    // The first word's strokes are identical, pixel for pixel: no shift from the taller capitals
+    // in the edited word. (Joins can merge letters, so count its strokes on their own.)
+    const n = render(h, 'alpha').polygons.length;
+    const first = (r: typeof a) => r.polygons.slice(0, n).map((p) => Array.from(p).join());
     expect(first(b)).toEqual(first(a));
     expect(b.baseline).toBe(a.baseline);
+  });
+
+  it('joins cursive letters into fewer strokes, and only within words', () => {
+    const h = randomHand(7);
+    h.skeleton = 'script';
+    h.params.joins = 1;
+    const joined = render(h, 'minimum').polygons.length;
+    h.params.joins = 0;
+    const apart = render(h, 'minimum').polygons.length;
+    expect(joined).toBeLessThan(apart);
+    h.params.joins = 1;
+    expect(render(h, 'a a').polygons.length).toBe(2 * render(h, 'a').polygons.length);
   });
 
   it('keeps the frame height fixed whatever letters are typed', () => {

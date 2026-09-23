@@ -86,6 +86,7 @@ Encoded as a short string: `s1` + base64url (≈ 35 chars). Unknown/older versio
 | | `taper` | thin start/end of strokes |
 | Behaviour | `fatigue` | mess grows with distance written |
 | | `tilt` | whole-line tilt (default 0) |
+| | `joins` | share of letter pairs joined (cursive default 0.9, print 0.1) |
 
 ## API (core)
 
@@ -116,10 +117,23 @@ deepest descender. Typing a tall or deep letter never moves the rest of the text
 - Text box, several hands side by side, sliders for every profile param, `mess` master slider
 - Randomise hand, copy/paste profile string, perf readout
 
+## Cursive joins
+
+- Each letter gets an **exit** (rightmost stroke end) and **entry** (leftmost stroke start).
+  Stroke direction in the skeleton data isn't reliable, so strokes are flipped as needed.
+- Whether a pair joins is a **habit**: keyed by `(hand seed, letter, next letter)`, joined when
+  that pair's draw is below `joins`. Joins only happen within a word, between letters.
+- The connector is a cubic curve following each end's direction, merged with both strokes into
+  one continuous stroke, so pen pressure and taper flow through and only the free ends taper.
+- No join when the gap is too big, it would go backwards, or it would climb to an ascender top
+  (c→k would read as a→k).
+- Letters entered from their right side (a, c, d, g, o, q) are joined **over the top**: the
+  connector arrives at the top of the bowl moving right and the pen retraces back over it.
+
 ## Roadmap
 
 1. **v2.0** core + SVG/Canvas renderers + playground ← now
-2. Cursive joins (connect exit/entry strokes), glyph variants per char
+2. ~~Cursive joins~~ (done, see below); glyph variants per char
 3. Ink: opacity/colour variance, pooling at stroke starts, pen-lift gaps
 4. Capture: write a pangram on a tablet → custom skeleton in profile
 5. Native: Rust core → WASM (web) + Swift/Kotlin bindings; or OTF export with contextual alternates

@@ -3,6 +3,7 @@ import { hash, rng } from './rand';
 
 export const SKELETONS = ['elfin', 'readability', 'felix', 'script', 'allure'] as const;
 export type SkeletonId = (typeof SKELETONS)[number];
+const CURSIVE = new Set<SkeletonId>(['script', 'allure']);
 
 interface ParamDef {
   key: string;
@@ -34,6 +35,7 @@ export const PARAMS = [
   { key: 'taper', label: 'Taper', min: 0, max: 1, def: 0.5, group: 'Pen' },
   { key: 'fatigue', label: 'Fatigue', min: 0, max: 1, def: 0.3, group: 'Behaviour' },
   { key: 'tilt', label: 'Line tilt (°)', min: -4, max: 4, def: 0.5, group: 'Behaviour' },
+  { key: 'joins', label: 'Joined letters', min: 0, max: 1, def: 0.5, group: 'Behaviour' },
 ] as const satisfies readonly ParamDef[];
 
 export type ParamKey = (typeof PARAMS)[number]['key'];
@@ -56,6 +58,7 @@ export function resolve(hand: Hand): Resolved {
 export function defaultHand(seed = 1, skeleton: SkeletonId = 'elfin'): Hand {
   const params = {} as Record<ParamKey, number>;
   for (const p of PARAMS) params[p.key] = q8(p.def);
+  params.joins = q8(CURSIVE.has(skeleton) ? 0.9 : 0.1);
   return { seed: seed >>> 0, skeleton, params };
 }
 
@@ -64,7 +67,9 @@ export function randomHand(seed: number): Hand {
   const r = rng(hash('hand', seed));
   const hand = defaultHand(hash('seed', seed), SKELETONS[Math.floor(r.next() * SKELETONS.length)]);
   for (const p of PARAMS) hand.params[p.key] = q8(p.def + r.bell() * 0.45);
-  hand.params.tilt = q8(0.5); // v1 lesson: line wander is annoying; keep tilt neutral by default
+  hand.params.tilt = q8(0.5);
+  // Cursive skeletons mostly join; print ones mostly don't, with the odd habitual join.
+  hand.params.joins = q8(CURSIVE.has(hand.skeleton) ? 0.7 + r.next() * 0.3 : r.next() * 0.3); // v1 lesson: line wander is annoying; keep tilt neutral by default
   return hand;
 }
 

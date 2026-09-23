@@ -63,13 +63,16 @@ export function render(hand: Hand, text: string, opts: RenderOptions = {}): Rend
       }
       const occ = occurrences.get(word) ?? 0;
       occurrences.set(word, occ + 1);
-      const chars = [...word];
-      for (let i = 0; i < chars.length; i++) {
+      const letters: Letter[] = [];
+      for (const ch of word) {
         const m = mess * (1 + P.fatigue * Math.min(travelled / 60, 2));
-        const adv = drawChar(hand, P, chars[i], hash(seed, 'i', word, i, occ), m, x, lineY, tiltTan, polys);
-        x += adv;
-        travelled += adv;
+        const l = drawChar(hand, P, ch, hash(seed, 'i', word, letters.length, occ), m, x, lineY, tiltTan);
+        letters.push(l);
+        x += l.adv;
+        travelled += l.adv;
       }
+      joinLetters(hand, P, letters, lineY);
+      for (const l of letters) for (const st of l.strokes) if (!st.into) polys.push(finishStroke(st, P));
       x += space;
     }
     lineY -= lineHeight;
@@ -131,14 +134,37 @@ function wordWidth(hand: Hand, P: Resolved, word: string): number {
   return w;
 }
 
+/** A centerline in layout units, before tremor and ink. */
+interface Stroke {
+  pts: number[];
+  /** Mess multiplier and size of the letter it started in; drive tremor and pen width. */
+  m: number;
+  scale: number;
+  key: number;
+  /** Set when this stroke has been appended to another (cursive join). */
+  into?: Stroke;
+}
+
+interface Letter {
+  ch: string;
+  /** Left edge (layout units) and advance. */
+  x: number;
+  adv: number;
+  strokes: Stroke[];
+  /** Stroke the pen leaves the letter on (at its end) and enters on (at its start). */
+  exit?: Stroke;
+  entry?: Stroke;
+}
+
 function drawChar(
   hand: Hand, P: Resolved, ch: string, key: number, m: number,
-  ox: number, oy: number, tiltTan: number, polys: Float64Array[],
-): number {
+  ox: number, oy: number, tiltTan: number,
+): Letter {
   const g = glyph(hand.skeleton, ch);
   const q = quirk(hand, ch);
   const qScale = 1 + q.scale * P.charScale; // not scaled by mess: it's part of the hand's layout
-  if (!g) return 0;
+  const letter: Letter = { ch, x: ox, adv: advance(hand, P, ch, qScale), strokes: [] };
+  if (!g) return letter;
   const r = rng(key);
 
   const scale = qScale * (1 + r.bell() * P.sizeJitter * m);
@@ -155,7 +181,7 @@ function drawChar(
   for (let s = 0; s < g.strokes.length; s++) {
     const src = g.strokes[s];
     const qd = q.disp[s];
-    let p: Pts = new Float64Array(src.length);
+    const p = new Array<number>(src.length);
     for (let i = 0; i < src.length; i += 2) {
       let x = src[i];
       let y = src[i + 1];
@@ -168,19 +194,174 @@ function drawChar(
       y += d[1];
       x *= P.width * scale;
       y = y * scale + lift;
-      x += y * shear;
+      x += y * shear + ox;
       p[i] = x;
-      p[i + 1] = y;
+      p[i + 1] = y + oy + x * tiltTan;
     }
-    p = adjustEnds(p, r.bell() * P.overshoot * m, r.bell() * P.overshoot * m);
-    p = tremor(p, P, r, m);
-    for (let i = 0; i < p.length; i += 2) {
-      p[i] += ox;
-      p[i + 1] += oy + p[i] * tiltTan;
-    }
-    polys.push(ink(p, P, r, scale));
+    letter.strokes.push({ pts: p, m, scale, key: hash(key, s) });
   }
-  return advance(hand, P, ch, qScale);
+  if (/\p{L}/u.test(ch)) pickEntryExit(letter, ox);
+  return letter;
+}
+
+/** Strokes this small (i dots, full stops) never carry a join. */
+const DOT = 0.2;
+
+/**
+ * Choose where the pen enters and leaves a letter: the exit is the rightmost stroke end and the
+ * entry the leftmost stroke start. Skeleton stroke direction isn't reliable (Allure draws some
+ * letters backwards), so strokes are reversed where needed.
+ */
+function pickEntryExit(l: Letter, ox: number) {
+  const big = l.strokes.filter((s) => extent(s.pts) >= DOT);
+  if (!big.length) return;
+  // Prefer longer strokes on near-ties, so a t's stem wins over its crossbar.
+  const bonus = (s: Stroke) => 0.03 * Math.min(pathLen(s.pts), 3);
+  let best = -Infinity;
+  for (const s of big) {
+    const n = s.pts.length;
+    for (const [x, atEnd] of [[s.pts[n - 2], true], [s.pts[0], false]] as const) {
+      if (x + bonus(s) > best) {
+        best = x + bonus(s);
+        l.exit = s;
+        if (!atEnd) s.pts = reversed(s.pts);
+      }
+    }
+  }
+  best = -Infinity;
+  for (const s of big) {
+    const n = s.pts.length;
+    const ends: (readonly [number, boolean])[] = [[s.pts[0], true]];
+    if (s !== l.exit) ends.push([s.pts[n - 2], false]);
+    for (const [x, atStart] of ends) {
+      if (-x + bonus(s) > best) {
+        best = -x + bonus(s);
+        l.entry = s;
+        if (!atStart) s.pts = reversed(s.pts);
+      }
+    }
+  }
+  // Entries far to the right of a letter (or exits far left) would draw a line through it.
+  const e = l.entry!.pts, x = l.exit!.pts;
+  if (e[0] - ox > l.adv * 0.7) l.entry = undefined;
+  if (x[x.length - 2] - ox < l.adv * 0.3) l.exit = undefined;
+}
+
+/**
+ * Cursive joins: connect a letter's exit to the next letter's entry with a smooth curve, merging
+ * them into one continuous stroke. Whether a pair joins is a habit of the hand: fixed per letter
+ * pair, so this person always joins "th" but maybe never "os".
+ */
+function joinLetters(hand: Hand, P: Resolved, letters: Letter[], baseline: number) {
+  for (let i = 1; i < letters.length; i++) {
+    const a = letters[i - 1], b = letters[i];
+    if (!a.exit || !b.entry) continue;
+    if (rng(hash(hand.seed, 'j', a.ch, b.ch)).next() >= P.joins) continue;
+    const X = root(a.exit), Y = b.entry;
+    const xp = X.pts;
+    const overTop = b.entry.pts[0] - b.x > b.adv * 0.4;
+    const yp = overTop ? fromTop(Y.pts) : Y.pts;
+    const ex = xp[xp.length - 2], ey = xp[xp.length - 1], sx = yp[0], sy = yp[1];
+    const dist = Math.hypot(sx - ex, sy - ey);
+    // Too far, or going backwards, or leaving from an ascender/descender tip: lift the pen.
+    if (dist > 1.2 || sx < ex - 0.4) continue;
+    if (Math.abs(ey - baseline - 0.5) > 0.9 || Math.abs(sy - baseline - 0.5) > 0.9) continue;
+    // Climbing to an ascender top (c→k) turns the letter into something else (a→k).
+    if (sy - ey > 0.8) continue;
+    // Where a letter's own direction fights the join (a's bowl starts top-right heading left),
+    // arrive or leave along the chord instead, giving a sharp turn like a real pen's retrace.
+    const cx = (sx - ex) / (dist || 1), cy = (sy - ey) / (dist || 1);
+    let [tex, tey] = endTangent(xp, true);
+    let [tsx, tsy] = endTangent(yp, false);
+    if (tex * cx + tey * cy < 0.2) [tex, tey] = [cx, cy];
+    // Letters entered from the right (a, c, d, g, o, q): arrive moving right along the top of the
+    // bowl, then the stroke doubles back over it, the way cursive goes "over the top".
+    if (overTop) [tsx, tsy] = [-tsx, -tsy];
+    else if (tsx * cx + tsy * cy < 0.2) [tsx, tsy] = [cx, cy];
+    const k = dist * 0.4;
+    const c1x = ex + tex * k, c1y = ey + tey * k, c2x = sx - tsx * k, c2y = sy - tsy * k;
+    const n = Math.max(1, Math.ceil(dist / 0.07));
+    for (let j = 1; j < n; j++) {
+      const t = j / n, u = 1 - t;
+      const w0 = u * u * u, w1 = 3 * u * u * t, w2 = 3 * u * t * t, w3 = t * t * t;
+      xp.push(w0 * ex + w1 * c1x + w2 * c2x + w3 * sx, w0 * ey + w1 * c1y + w2 * c2y + w3 * sy);
+    }
+    for (let j = 0; j < yp.length; j++) xp.push(yp[j]);
+    Y.into = X;
+  }
+}
+
+/**
+ * Start a stroke from its highest point in the first 40% of its length instead: for a bowl that
+ * starts part-way up its right side, that's the top of the bowl. The pen runs back down the head
+ * to the original start and then along the stroke as normal, so the retrace overlaps itself and
+ * the bowl stays closed.
+ */
+function fromTop(p: number[]): number[] {
+  const limit = pathLen(p) * 0.4;
+  let best = 0, d = 0;
+  for (let i = 2; i < p.length && d < limit; i += 2) {
+    d += Math.hypot(p[i] - p[i - 2], p[i + 1] - p[i - 1]);
+    if (p[i + 1] > p[best + 1]) best = i;
+  }
+  if (p[best + 1] - p[1] <= 0.05) return p;
+  return [...reversed(p.slice(0, best + 2)), ...p.slice(2)];
+}
+
+function root(s: Stroke): Stroke {
+  while (s.into) s = s.into;
+  return s;
+}
+
+/** Direction of travel at the end (atEnd) or start of a stroke, averaged over ~0.15 x-heights. */
+function endTangent(p: number[], atEnd: boolean): [number, number] {
+  const n = p.length / 2;
+  let i0: number, i1: number;
+  if (atEnd) {
+    i1 = n - 1;
+    i0 = i1;
+    while (i0 > 0 && Math.hypot(p[i1 * 2] - p[i0 * 2], p[i1 * 2 + 1] - p[i0 * 2 + 1]) < 0.15) i0--;
+  } else {
+    i0 = 0;
+    i1 = 0;
+    while (i1 < n - 1 && Math.hypot(p[i1 * 2] - p[i0 * 2], p[i1 * 2 + 1] - p[i0 * 2 + 1]) < 0.15) i1++;
+  }
+  const dx = p[i1 * 2] - p[i0 * 2], dy = p[i1 * 2 + 1] - p[i0 * 2 + 1];
+  const len = Math.hypot(dx, dy) || 1;
+  return [dx / len, dy / len];
+}
+
+function extent(p: number[]): number {
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (let i = 0; i < p.length; i += 2) {
+    x0 = Math.min(x0, p[i]); x1 = Math.max(x1, p[i]);
+    y0 = Math.min(y0, p[i + 1]); y1 = Math.max(y1, p[i + 1]);
+  }
+  return Math.hypot(x1 - x0, y1 - y0);
+}
+
+function pathLen(p: number[]): number {
+  let d = 0;
+  for (let i = 2; i < p.length; i += 2) d += Math.hypot(p[i] - p[i - 2], p[i + 1] - p[i - 1]);
+  return d;
+}
+
+function reversed(p: number[]): number[] {
+  const out = new Array<number>(p.length);
+  for (let i = 0; i < p.length; i += 2) {
+    out[p.length - 2 - i] = p[i];
+    out[p.length - 1 - i] = p[i + 1];
+  }
+  return out;
+}
+
+/** Overshoot at the free ends, tremor, then the pen. */
+function finishStroke(st: Stroke, P: Resolved): Float64Array {
+  const r = rng(st.key);
+  let p: Pts = new Float64Array(st.pts);
+  p = adjustEnds(p, r.bell() * P.overshoot * st.m, r.bell() * P.overshoot * st.m);
+  p = tremor(p, P, r, st.m);
+  return ink(p, P, r, st.scale);
 }
 
 /** Adds the displacement at (x, y), scaled by amp, into out. */
