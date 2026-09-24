@@ -2,6 +2,7 @@
 import { adjustEnds, circle, length, normals, outline, type Pts } from './geometry';
 import { resolve, type Hand, type Resolved } from './profile';
 import { hash, noise1, rng, type Rng } from './rand';
+import { JOIN_RULES, type JoinRules } from '../data/join-rules';
 import { extents, glyph } from './skeleton';
 
 export interface RenderOptions {
@@ -200,7 +201,7 @@ function drawChar(
     }
     letter.strokes.push({ pts: p, m, scale, key: hash(key, s) });
   }
-  if (/\p{L}/u.test(ch)) pickEntryExit(letter, ox);
+  if (/\p{L}/u.test(ch)) pickEntryExit(letter, ox, oy);
   return letter;
 }
 
@@ -212,17 +213,19 @@ const DOT = 0.2;
  * entry the leftmost stroke start. Skeleton stroke direction isn't reliable (Allure draws some
  * letters backwards), so strokes are reversed where needed.
  */
-function pickEntryExit(l: Letter, ox: number) {
+function pickEntryExit(l: Letter, ox: number, oy: number) {
   const big = l.strokes.filter((s) => extent(s.pts) >= DOT);
   if (!big.length) return;
-  // Prefer longer strokes on near-ties, so a t's stem wins over its crossbar.
+  // Prefer longer strokes on near-ties, so a t's stem wins over its crossbar. On ties in x,
+  // exits prefer the lower end (a stem's foot) and entries the higher (a stem's top).
   const bonus = (s: Stroke) => 0.03 * Math.min(pathLen(s.pts), 3);
   let best = -Infinity;
   for (const s of big) {
     const n = s.pts.length;
-    for (const [x, atEnd] of [[s.pts[n - 2], true], [s.pts[0], false]] as const) {
-      if (x + bonus(s) > best) {
-        best = x + bonus(s);
+    for (const [x, y, atEnd] of [[s.pts[n - 2], s.pts[n - 1], true], [s.pts[0], s.pts[1], false]] as const) {
+      const score = x + bonus(s) - 0.05 * (y - oy);
+      if (score > best) {
+        best = score;
         l.exit = s;
         if (!atEnd) s.pts = reversed(s.pts);
       }
@@ -231,11 +234,12 @@ function pickEntryExit(l: Letter, ox: number) {
   best = -Infinity;
   for (const s of big) {
     const n = s.pts.length;
-    const ends: (readonly [number, boolean])[] = [[s.pts[0], true]];
-    if (s !== l.exit) ends.push([s.pts[n - 2], false]);
-    for (const [x, atStart] of ends) {
-      if (-x + bonus(s) > best) {
-        best = -x + bonus(s);
+    const ends: (readonly [number, number, boolean])[] = [[s.pts[0], s.pts[1], true]];
+    if (s !== l.exit) ends.push([s.pts[n - 2], s.pts[n - 1], false]);
+    for (const [x, y, atStart] of ends) {
+      const score = -x + bonus(s) + 0.05 * (y - oy);
+      if (score > best) {
+        best = score;
         l.entry = s;
         if (!atStart) s.pts = reversed(s.pts);
       }
@@ -253,27 +257,37 @@ function pickEntryExit(l: Letter, ox: number) {
  * pair, so this person always joins "th" but maybe never "os".
  */
 function joinLetters(hand: Hand, P: Resolved, letters: Letter[], baseline: number) {
+  const rules = JOIN_RULES[hand.skeleton];
   for (let i = 1; i < letters.length; i++) {
     const a = letters[i - 1], b = letters[i];
     if (!a.exit || !b.entry) continue;
+    if (rules && !allowed(rules, a.ch, b.ch)) continue;
     if (rng(hash(hand.seed, 'j', a.ch, b.ch)).next() >= P.joins) continue;
     const X = root(a.exit), Y = b.entry;
     const xp = X.pts;
     const overTop = b.entry.pts[0] - b.x > b.adv * 0.4;
-    const yp = overTop ? fromTop(Y.pts) : Y.pts;
+    // Print letters drawn up from the foot of a stem (n, r, m, p) are entered at the stem's top.
+    const stem = !overTop && !!rules && risesAsStem(Y.pts);
+    const yp = overTop || stem ? fromTop(Y.pts) : Y.pts;
     const ex = xp[xp.length - 2], ey = xp[xp.length - 1], sx = yp[0], sy = yp[1];
     const dist = Math.hypot(sx - ex, sy - ey);
     // Too far, or going backwards, or leaving from an ascender/descender tip: lift the pen.
     if (dist > 1.2 || sx < ex - 0.4) continue;
     if (Math.abs(ey - baseline - 0.5) > 0.9 || Math.abs(sy - baseline - 0.5) > 0.9) continue;
     // Climbing to an ascender top (c→k) turns the letter into something else (a→k).
-    if (sy - ey > 0.8) continue;
+    // A join table has already vetted its pairs.
+    if (!rules && sy - ey > 0.8) continue;
     // Where a letter's own direction fights the join (a's bowl starts top-right heading left),
     // arrive or leave along the chord instead, giving a sharp turn like a real pen's retrace.
     const cx = (sx - ex) / (dist || 1), cy = (sy - ey) / (dist || 1);
     let [tex, tey] = endTangent(xp, true);
     let [tsx, tsy] = endTangent(yp, false);
-    if (tex * cx + tey * cy < 0.2) [tex, tey] = [cx, cy];
+    // Leaving the foot of a downstroke (i, n, h) the pen curls right before rising, rather than
+    // snapping straight back up.
+    if (tex * cx + tey * cy < 0.2) {
+      const hx = 1 + cx * 0.5, hy = cy * 0.5, hl = Math.hypot(hx, hy);
+      [tex, tey] = [hx / hl, hy / hl];
+    }
     // Letters entered from the right (a, c, d, g, o, q): arrive moving right along the top of the
     // bowl, then the stroke doubles back over it, the way cursive goes "over the top".
     if (overTop) [tsx, tsy] = [-tsx, -tsy];
@@ -306,6 +320,23 @@ function fromTop(p: number[]): number[] {
   }
   if (p[best + 1] - p[1] <= 0.05) return p;
   return [...reversed(p.slice(0, best + 2)), ...p.slice(2)];
+}
+
+function allowed(r: JoinRules, a: string, b: string): boolean {
+  const pair = a + b;
+  if (r.always?.includes(pair)) return true;
+  if (r.never?.includes(pair)) return false;
+  return r.from.includes(a) && r.to.includes(b);
+}
+
+/** Does the stroke start by going up a near-vertical stem? */
+function risesAsStem(p: number[]): boolean {
+  // Follow the stroke while it keeps climbing, then check it climbed far and steeply (a slanted
+  // stem drifts sideways, so allow some).
+  let i = 2;
+  while (i < p.length && p[i + 1] >= p[i - 1] - 0.02) i += 2;
+  const rise = p[i - 1] - p[1];
+  return rise > 0.5 && Math.abs(p[i - 2] - p[0]) < 0.6 * rise;
 }
 
 function root(s: Stroke): Stroke {

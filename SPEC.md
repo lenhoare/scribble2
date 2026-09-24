@@ -49,7 +49,7 @@ text    ──► │ → tremor → pen model (width/taper/pressure) → outlin
 - **Skeletons**: single-stroke (centerline) fonts, converted at build time into normalized
   stroke data (units: x-height = 1, baseline = 0, y up).
   - Elfin (casual print), Readability (neat print), Felix (italic), Hershey Script (cursive),
-    Allure (flowing script). Licenses in `fonts/README.md`.
+    Allure (flowing script), Semi-joined (Readability + a join table). Licenses in `fonts/README.md`.
   - Later: capture a real person's strokes as a custom skeleton.
 
 ## Determinism & stability
@@ -86,7 +86,7 @@ Encoded as a short string: `s1` + base64url (≈ 35 chars). Unknown/older versio
 | | `taper` | thin start/end of strokes |
 | Behaviour | `fatigue` | mess grows with distance written |
 | | `tilt` | whole-line tilt (default 0) |
-| | `joins` | share of letter pairs joined (cursive default 0.9, print 0.1) |
+| | `joins` | share of allowed letter pairs joined (cursive 0.9, semi-joined 1, print 0) |
 
 ## API (core)
 
@@ -129,6 +129,13 @@ deepest descender. Typing a tall or deep letter never moves the rest of the text
   (c→k would read as a→k).
 - Letters entered from their right side (a, c, d, g, o, q) are joined **over the top**: the
   connector arrives at the top of the bowl moving right and the pen retraces back over it.
+- Leaving the foot of a downstroke (i, n, h), the connector curls right before rising.
+- **Join tables** (`src/data/join-rules.ts`): a skeleton can list which letters join `from`
+  and `to`, plus `always` / `never` pair overrides. Used by **Semi-joined** (Readability's
+  letterforms, modern semi-joined print: h→i→n, e→r, t→i→r, e→f join; nothing joins into or out
+  of o or g; p→h, n→x, a→c, u→a don't). Print letters built up from a stem foot (n, m, r, p)
+  are entered at the top of the stem. The table is expected to grow with feedback.
+- Plain print skeletons don't join by default: random print joins looked wrong.
 
 ## Roadmap
 

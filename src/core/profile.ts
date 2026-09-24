@@ -1,7 +1,8 @@
 // A hand profile: seed + skeleton + normalized (0..1) params. Encodes to a short string.
 import { hash, rng } from './rand';
 
-export const SKELETONS = ['elfin', 'readability', 'felix', 'script', 'allure'] as const;
+// Order matters: the index is stored in hand codes. Only ever append.
+export const SKELETONS = ['elfin', 'readability', 'felix', 'script', 'allure', 'semijoined'] as const;
 export type SkeletonId = (typeof SKELETONS)[number];
 const CURSIVE = new Set<SkeletonId>(['script', 'allure']);
 
@@ -58,7 +59,7 @@ export function resolve(hand: Hand): Resolved {
 export function defaultHand(seed = 1, skeleton: SkeletonId = 'elfin'): Hand {
   const params = {} as Record<ParamKey, number>;
   for (const p of PARAMS) params[p.key] = q8(p.def);
-  params.joins = q8(CURSIVE.has(skeleton) ? 0.9 : 0.1);
+  params.joins = q8(CURSIVE.has(skeleton) ? 0.9 : skeleton === 'semijoined' ? 1 : 0);
   return { seed: seed >>> 0, skeleton, params };
 }
 
@@ -67,9 +68,13 @@ export function randomHand(seed: number): Hand {
   const r = rng(hash('hand', seed));
   const hand = defaultHand(hash('seed', seed), SKELETONS[Math.floor(r.next() * SKELETONS.length)]);
   for (const p of PARAMS) hand.params[p.key] = q8(p.def + r.bell() * 0.45);
-  hand.params.tilt = q8(0.5);
-  // Cursive skeletons mostly join; print ones mostly don't, with the odd habitual join.
-  hand.params.joins = q8(CURSIVE.has(hand.skeleton) ? 0.7 + r.next() * 0.3 : r.next() * 0.3); // v1 lesson: line wander is annoying; keep tilt neutral by default
+  hand.params.tilt = q8(0.5); // v1 lesson: line wander is annoying; keep tilt neutral
+  // Cursive skeletons mostly join and print ones don't (random print joins look wrong: use
+  // semi-joined for that). Semi-joined follows its join table, so most allowed pairs join.
+  const j = r.next();
+  hand.params.joins = q8(
+    CURSIVE.has(hand.skeleton) ? 0.7 + j * 0.3 : hand.skeleton === 'semijoined' ? 0.85 + j * 0.15 : 0,
+  );
   return hand;
 }
 

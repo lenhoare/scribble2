@@ -12,11 +12,15 @@ const STEP = 0.07;
 const raw = data as Record<string, { glyphs: Record<string, { a: number; s: number[][] }> }>;
 const cache = new Map<string, Glyph | null>();
 
+/** Skeletons that reuse another's letterforms and differ only in how they join. */
+const BASE: Partial<Record<SkeletonId, string>> = { semijoined: 'readability' };
+const glyphsOf = (skeleton: SkeletonId) => raw[BASE[skeleton] ?? skeleton].glyphs;
+
 export function glyph(skeleton: SkeletonId, ch: string): Glyph | null {
   const key = skeleton + ch;
   let g = cache.get(key);
   if (g === undefined) {
-    const glyphs = raw[skeleton].glyphs;
+    const glyphs = glyphsOf(skeleton);
     // Fall back to the unaccented letter (é → e), then '?'.
     const src = glyphs[ch] ?? glyphs[ch.normalize('NFD')[0]] ?? glyphs['?'];
     g = src ? { adv: src.a, strokes: src.s.map(densify) } : null;
@@ -44,7 +48,7 @@ export function extents(skeleton: SkeletonId): { top: number; bottom: number } {
   if (!e) {
     e = { top: 1, bottom: 0 };
     for (const ch of 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') {
-      for (const s of raw[skeleton].glyphs[ch]?.s ?? []) {
+      for (const s of glyphsOf(skeleton)[ch]?.s ?? []) {
         for (let i = 1; i < s.length; i += 2) {
           if (s[i] > e.top) e.top = s[i];
           if (s[i] < e.bottom) e.bottom = s[i];
